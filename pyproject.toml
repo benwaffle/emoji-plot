@@ -1,0 +1,13 @@
+[project]
+name = "emojiplot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "emoji==2.*",
+    "matplotlib>=3.10.6",
+    "mplcairo>=0.6.1",
+    "sentence-transformers>=5.1.0",
+    "umap-learn>=0.5.9.post2",
+]
