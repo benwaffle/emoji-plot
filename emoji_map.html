@@ -137,9 +137,11 @@
       const rect = canvas.getBoundingClientRect();
       const mx = (ev.clientX - rect.left);
       const my = (ev.clientY - rect.top);
-      let best = -1, bestD2 = 400; // px^2
+      let best = -1;
+      const hitR = Math.max(10, (baseSize * transform.k) * 0.6);
+      let bestD2 = hitR * hitR; // px^2
       for (let i = 0; i < n; i++) {
-        const [px, py] = dataToPixel(xs[i], ys[i]);
+        const [px, py] = dataToPixel(curXs[i], curYs[i]);
         const dx = px - mx, dy = py - my;
         const d2 = dx*dx + dy*dy;
         if (d2 < bestD2) { bestD2 = d2; best = i; }
