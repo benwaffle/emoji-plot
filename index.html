@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>emoji semantic map</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #plot { position: relative; width: 100%; height: 100%; background: #fff; }
+    .tooltip {
+      position: absolute; pointer-events: none; display: none;
+      background: rgba(0,0,0,0.8); color: #fff; padding: 4px 6px;
+      border-radius: 4px; font: 12px/1.4 -apple-system, BlinkMacSystemFont,
+      'Segoe UI', Roboto, Helvetica, Arial, sans-serif; white-space: nowrap;
+    }
+    .banner { position: absolute; top: 8px; right: 10px; font: 12px/1.4 sans-serif; color: #666; }
+    .loading { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      width: 320px; background: rgba(255,255,255,0.95); border: 1px solid #ddd; border-radius: 8px;
+      padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); font: 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:#333; }
+    .loading .title { font-weight: 600; margin-bottom: 8px; }
+    .loading .bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
+    .loading .fill { height: 100%; width: 0; background: #3b82f6; transition: width 120ms ease-out; }
+    .loading .pct { margin-top: 6px; text-align: right; color: #666; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+</head>
+<body>
+  <div id="plot"></div>
+  <div class="banner">Use mouse to pan/zoom; hover for names</div>
+  <script>
+  (async function () {
+    // Load cached positions; must be served over HTTP(S), not file://
+    let payload;
+    try {
+      const res = await fetch('data/emoji_positions.json');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      payload = await res.json();
+    } catch (e) {
+      const msg = document.createElement('div');
+      msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:14px sans-serif;color:#c00;text-align:center;padding:20px;';
+      msg.textContent = 'Failed to load data/emoji_positions.json. Run a local server (e.g., `make serve`) and open http://localhost:8000/index.html';
+      document.body.appendChild(msg);
+      console.error('Failed to fetch positions JSON:', e);
+      return;
+    }
+
+    const xs = payload.x, ys = payload.y, emjs = payload.emoji, labels = payload.label;
+    const n = xs.length;
+    let curXs = xs.slice(), curYs = ys.slice();
+    const padding = 20; const baseSize = 28;
+    const dpr = window.devicePixelRatio || 1;
+
+    const xmin = Math.min(...xs), xmax = Math.max(...xs);
+    const ymin = Math.min(...ys), ymax = Math.max(...ys);
+
+    const container = document.getElementById('plot');
+    const canvas = document.createElement('canvas');
+    container.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+
+    const tooltip = document.createElement('div');
+    tooltip.className = 'tooltip';
+    container.appendChild(tooltip);
+
+    let transform = d3.zoomIdentity;
+    const xScale = d3.scaleLinear().domain([xmin, xmax]);
+    const yScale = d3.scaleLinear().domain([ymin, ymax]);
+
+    function resize() {
+      const rect = container.getBoundingClientRect();
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+      canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      draw();
+    }
+
+    function dataToPixel(x, y) {
+      const px = transform.applyX(xScale(x));
+      const py = transform.applyY(yScale(y));
+      return [px, py];
+    }
+
+    // Fast system-font rendering via prerendered glyph canvases
+    const FONT_STACK = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twitter Color Emoji","EmojiOne Color","Segoe UI Symbol",sans-serif';
+    const ATLAS_PX = 96; // base prerender size
+    // Reduce internal padding so emojis sit closer
+    const PAD = Math.round(ATLAS_PX * 0.08);
+    const glyphCache = new Map(); // emoji -> canvas
+    async function prerenderEmojis() {
+      // Build loading UI
+      const overlay = document.createElement('div');
+      overlay.className = 'loading';
+      overlay.innerHTML = '<div class="title">Preparing emojis…</div>\
+        <div class="bar"><div class="fill"></div></div>\
+        <div class="pct">0%</div>';
+      container.appendChild(overlay);
+      const fill = overlay.querySelector('.fill');
+      const pct = overlay.querySelector('.pct');
+
+      const unique = Array.from(new Set(emjs));
+      const total = unique.length;
+      let done = 0;
+      function setProgress(p) {
+        const pc = Math.max(0, Math.min(1, p));
+        // Keep bar and text visually in-sync
+        const pctNum = Math.round(pc * 100);
+        fill.style.width = (pc * 100) + '%';
+        pct.textContent = pctNum + '%';
+      }
+      let i = 0;
+      while (i < total) {
+        const frameStart = performance.now();
+        // Process for ~12ms per frame to keep UI responsive
+        while (i < total && (performance.now() - frameStart) < 12) {
+          const e = unique[i++];
+          if (!glyphCache.has(e)) {
+            const c = document.createElement('canvas');
+            c.width = ATLAS_PX + PAD * 2;
+            c.height = ATLAS_PX + PAD * 2;
+            const g = c.getContext('2d');
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.font = ATLAS_PX + 'px ' + FONT_STACK;
+            g.fillText(e, (ATLAS_PX/2)+PAD, (ATLAS_PX/2)+PAD);
+            glyphCache.set(e, c);
+          }
+          done++;
+        }
+        setProgress(done / total);
+        await new Promise(requestAnimationFrame);
+      }
+      // Ensure final 100% is painted before removing overlay
+      setProgress(1);
+      await new Promise(resolve => setTimeout(resolve, 140));
+      overlay.remove();
+    }
+
+    function draw() {
+      const rect = canvas.getBoundingClientRect();
+      xScale.range([padding, rect.width - padding]);
+      yScale.range([rect.height - padding, padding]);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+      for (let i = 0; i < n; i++) {
+        const [px, py] = dataToPixel(curXs[i], curYs[i]);
+        const size = baseSize * transform.k;
+        const glyph = glyphCache.get(emjs[i]);
+        if (glyph) {
+          ctx.drawImage(glyph, px - size/2, py - size/2, size, size);
+        } else {
+          ctx.fillStyle = '#666'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.font = (size) + 'px sans-serif'; ctx.fillText('?', px, py);
+        }
+      }
+    }
+
+    // One-time layout relaxation to reduce overlaps in screen space
+    function relax() {
+      const rect = canvas.getBoundingClientRect();
+      xScale.range([padding, rect.width - padding]);
+      yScale.range([rect.height - padding, padding]);
+      const nodes = new Array(n);
+      for (let i = 0; i < n; i++) {
+        // Smaller jitter; keep points closer to originals
+        const jx = (Math.random() - 0.5) * 0.25;
+        const jy = (Math.random() - 0.5) * 0.25;
+        nodes[i] = { i, x: xScale(xs[i]) + jx, y: yScale(ys[i]) + jy };
+      }
+      // Closer packing: smaller collide radius, slightly stronger anchor
+      const collideR = baseSize * 0.52; const anchor = 0.22;
+      const sim = d3.forceSimulation(nodes)
+        .alpha(0.9)
+        .alphaDecay(0.025)
+        .force('x', d3.forceX(d => nodes[d.i].x).strength(anchor))
+        .force('y', d3.forceY(d => nodes[d.i].y).strength(anchor))
+        .force('collide', d3.forceCollide(collideR).iterations(2))
+        .stop();
+      for (let t = 0; t < 220; t++) sim.tick();
+      curXs = new Array(n); curYs = new Array(n);
+      for (let i = 0; i < n; i++) { curXs[i] = xScale.invert(nodes[i].x); curYs[i] = yScale.invert(nodes[i].y); }
+      draw();
+    }
+
+    // Coalesce draw calls during zoom for smoother perf
+    let raf = null;
+    const zoom = d3.zoom().scaleExtent([0.5, 20]).on('zoom', (ev) => {
+      transform = ev.transform;
+      if (!raf) raf = requestAnimationFrame(() => { raf = null; draw(); });
+    });
+    d3.select(canvas).call(zoom);
+
+    canvas.addEventListener('mousemove', (ev) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = (ev.clientX - rect.left); const my = (ev.clientY - rect.top);
+      const hitR = Math.max(10, (baseSize * transform.k) * 0.6); let bestD2 = hitR * hitR; let best = -1;
+      for (let i = 0; i < n; i++) {
+        const [px, py] = dataToPixel(curXs[i], curYs[i]); const dx = px - mx, dy = py - my; const d2 = dx*dx + dy*dy;
+        if (d2 < bestD2) { bestD2 = d2; best = i; }
+      }
+      if (best >= 0) { tooltip.textContent = labels[best]; tooltip.style.display = 'block'; tooltip.style.left = (mx + 12) + 'px'; tooltip.style.top = (my + 12) + 'px'; }
+      else { tooltip.style.display = 'none'; }
+    });
+    canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
+    window.addEventListener('resize', () => { curXs = xs.slice(); curYs = ys.slice(); resize(); });
+    await prerenderEmojis();
+    resize();
+    relax();
+  })();
+  </script>
+</body>
+</html>
