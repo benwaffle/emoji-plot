@@ -155,8 +155,8 @@
       }
     }
 
-    // One-time layout relaxation to reduce overlaps in screen space
-    function relax() {
+    // One-time layout relaxation to reduce overlaps in screen space (non-blocking)
+    function relaxAsync() {
       const rect = canvas.getBoundingClientRect();
       xScale.range([padding, rect.width - padding]);
       yScale.range([rect.height - padding, padding]);
@@ -176,10 +176,17 @@
         .force('y', d3.forceY(d => nodes[d.i].y).strength(anchor))
         .force('collide', d3.forceCollide(collideR).iterations(2))
         .stop();
-      for (let t = 0; t < 220; t++) sim.tick();
-      curXs = new Array(n); curYs = new Array(n);
-      for (let i = 0; i < n; i++) { curXs[i] = xScale.invert(nodes[i].x); curYs[i] = yScale.invert(nodes[i].y); }
-      draw();
+      const maxTicks = 220;
+      let ticks = 0;
+      function step() {
+        const batch = 30;
+        for (let k = 0; k < batch && ticks < maxTicks; k++) { sim.tick(); ticks++; }
+        curXs = new Array(n); curYs = new Array(n);
+        for (let i = 0; i < n; i++) { curXs[i] = xScale.invert(nodes[i].x); curYs[i] = yScale.invert(nodes[i].y); }
+        draw();
+        if (ticks < maxTicks) requestAnimationFrame(step); else sim.stop();
+      }
+      requestAnimationFrame(step);
     }
 
     // Coalesce draw calls during zoom for smoother perf
@@ -206,7 +213,9 @@
     window.addEventListener('resize', () => { curXs = xs.slice(); curYs = ys.slice(); resize(); });
     await prerenderEmojis();
     resize();
-    relax();
+    draw();
+    await new Promise(requestAnimationFrame);
+    relaxAsync();
   })();
   </script>
 </body>
